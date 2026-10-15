@@ -40,7 +40,7 @@ typedef struct {
 static ABI int32_t ef_create(EventFlag **out,const char *name,uint32_t attr,uint64_t init,const void *param) {
     (void)param;
     if (!out || (attr & ~UINT32_C(0x33))) return KERR_EINVAL;
-    EventFlag *ef=calloc(1,sizeof(*ef));
+    EventFlag *ef=runtime_guest_calloc(1,sizeof(*ef));
     if (!ef) return KERR_ENOMEM;
     ef->magic=EF_MAGIC; ef->attr=attr; ef->bits=init;
     pthread_mutex_init(&ef->lock,NULL);
@@ -57,7 +57,7 @@ static ABI int32_t ef_delete(EventFlag *ef) {
     int busy=ef->waiters;
     pthread_mutex_unlock(&ef->lock);
     /* Waiters return ESRCH; the object is leaked if any were blocked, since they still read it. */
-    if (!busy) { ef->magic=0; pthread_cond_destroy(&ef->cond); pthread_mutex_destroy(&ef->lock); free(ef); }
+    if (!busy) { ef->magic=0; pthread_cond_destroy(&ef->cond); pthread_mutex_destroy(&ef->lock); runtime_guest_free(ef); }
     return 0;
 }
 static ABI int32_t ef_set(EventFlag *ef,uint64_t bits) {

@@ -73,8 +73,8 @@ static ABI int32_t videodec_create(const ConfigInfo *config, const ResourceInfo 
     if (!config || !resource || !out) return ERR_ARGUMENT_POINTER;
     if (config->this_size!=sizeof(*config) || resource->this_size!=sizeof(*resource)) return ERR_STRUCT_SIZE;
     const AVCodec *codec=avcodec_find_decoder(AV_CODEC_ID_H264);
-    Decoder *d=calloc(1,sizeof(*d));
-    if (!codec || !d) { free(d); return ERR_API_FAIL; }
+    Decoder *d=runtime_guest_calloc(1,sizeof(*d));
+    if (!codec || !d) { runtime_guest_free(d); return ERR_API_FAIL; }
     d->codec=avcodec_alloc_context3(codec);
     d->packet=av_packet_alloc();
     d->frame=av_frame_alloc();
@@ -82,7 +82,7 @@ static ABI int32_t videodec_create(const ConfigInfo *config, const ResourceInfo 
     if (d->codec) d->codec->flags|=AV_CODEC_FLAG_COPY_OPAQUE; /* attached data follows its picture */
     if (!d->codec || !d->packet || !d->frame || !d->nv12 || avcodec_open2(d->codec,codec,NULL)<0) {
         avcodec_free_context(&d->codec); av_packet_free(&d->packet); av_frame_free(&d->frame); av_frame_free(&d->nv12);
-        free(d); return ERR_API_FAIL;
+        runtime_guest_free(d); return ERR_API_FAIL;
     }
     out->this_size=sizeof(*out); out->handle=d; out->version=1;
     return 0;
@@ -174,7 +174,7 @@ static ABI int32_t videodec_delete(Ctrl *ctrl) {
     if (!d) return ERR_HANDLE;
     avcodec_free_context(&d->codec); av_packet_free(&d->packet); av_frame_free(&d->frame); av_frame_free(&d->nv12);
     sws_freeContext(d->sws);
-    free(d);
+    runtime_guest_free(d);
     ctrl->handle=NULL;
     return 0;
 }

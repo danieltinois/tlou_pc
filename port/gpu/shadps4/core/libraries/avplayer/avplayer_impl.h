@@ -8,12 +8,30 @@
 
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string_view>
 
 namespace Libraries::AvPlayer {
 
+#ifdef __APPLE__
+extern "C" void* runtime_guest_calloc(size_t count, size_t size);
+extern "C" void runtime_guest_free(void* p);
+#endif
+
 class AvPlayer {
 public:
+#ifdef __APPLE__
+    // tlg: the game keeps this object's address as its player handle; below 1 TiB on macOS.
+    static void* operator new(size_t size) {
+        if (void* p = runtime_guest_calloc(1, size)) {
+            return p;
+        }
+        throw std::bad_alloc();
+    }
+    static void operator delete(void* p) {
+        runtime_guest_free(p);
+    }
+#endif
     AvPlayer(const AvPlayerInitData& data);
 
     s32 PostInit(const AvPlayerPostInitData& data);

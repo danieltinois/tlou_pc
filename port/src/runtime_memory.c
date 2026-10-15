@@ -843,6 +843,60 @@ void *runtime_low_map(size_t size, int prot) {
     return p==MAP_FAILED ? NULL : p;
 #endif
 }
+#ifdef __APPLE__
+/* ---- guest-visible host objects (runtime.h runtime_guest_calloc) ----
+ * Blocks of 64 B to 4 KiB come from 64 KiB slabs of low memory, one free list per size class;
+ * bigger ones get their own pages. A 64-byte header before each block keeps its class (or
+ * page count) and the payload 64-byte aligned. */
+#define GUEST_HEADER 64u
+#define GUEST_CLASSES 7 /* 64 .. 4096 bytes with the header */
+#define GUEST_SLAB (64u*1024)
+#define GUEST_MAGIC UINT64_C(0x5041454857534554) /* "TESWHEAP" */
+typedef struct GuestBlock { uint64_t magic, kind; struct GuestBlock *next; } GuestBlock;
+_Static_assert(sizeof(GuestBlock)<=GUEST_HEADER,"guest heap header");
+static pthread_mutex_t guest_heap_lock=PTHREAD_MUTEX_INITIALIZER;
+static GuestBlock *guest_free_lists[GUEST_CLASSES];
+static unsigned char *guest_slab, *guest_slab_end;
+void *runtime_guest_calloc(size_t count, size_t size) {
+    if (size && count>(SIZE_MAX-GUEST_HEADER)/size) return NULL;
+    const size_t bytes=GUEST_HEADER+(count*size ? count*size : 1);
+    unsigned kind=0;
+    while (kind<GUEST_CLASSES && ((size_t)64<<kind)<bytes) ++kind;
+    GuestBlock *b;
+    if (kind==GUEST_CLASSES) { /* large: own pages, unmapped on free */
+        const size_t pages=align_up(bytes,PAGE)/PAGE;
+        if (!(b=runtime_low_map(pages*PAGE,PROT_READ|PROT_WRITE))) return NULL;
+        b->kind=GUEST_CLASSES+pages;
+    } else {
+        const size_t block=(size_t)64<<kind;
+        pthread_mutex_lock(&guest_heap_lock);
+        if ((b=guest_free_lists[kind])) guest_free_lists[kind]=b->next;
+        else {
+            if ((size_t)(guest_slab_end-guest_slab)<block) {
+                guest_slab=runtime_low_map(GUEST_SLAB,PROT_READ|PROT_WRITE); /* mapped pages read as zero */
+                guest_slab_end=guest_slab ? guest_slab+GUEST_SLAB : NULL;
+            }
+            if (guest_slab) { b=(GuestBlock *)guest_slab; guest_slab+=block; }
+        }
+        pthread_mutex_unlock(&guest_heap_lock);
+        if (!b) return NULL;
+        memset(b,0,block); /* reused blocks are zeroed like calloc's */
+        b->kind=kind;
+    }
+    b->magic=GUEST_MAGIC;
+    return (unsigned char *)b+GUEST_HEADER;
+}
+void runtime_guest_free(void *p) {
+    if (!p) return;
+    GuestBlock *b=(GuestBlock *)((unsigned char *)p-GUEST_HEADER);
+    if (b->magic!=GUEST_MAGIC) { fprintf(stderr,"STOP: runtime_guest_free(%p): not a guest heap block\n",p); exit(21); }
+    b->magic=0;
+    if (b->kind>=GUEST_CLASSES) { munmap(b,(b->kind-GUEST_CLASSES)*PAGE); return; }
+    pthread_mutex_lock(&guest_heap_lock);
+    b->next=guest_free_lists[b->kind]; guest_free_lists[b->kind]=b;
+    pthread_mutex_unlock(&guest_heap_lock);
+}
+#endif
 /* ---- GPU library interface (gpu/shim/tlggpu.cpp) ---- */
 /* Optimizations switched off at run time (diagnostics): the number in the file named by
  * TLG_TOGGLE_FILE, re-read every 250 ms. Bits: 1 region cache, 2 fetch shader cache,

@@ -873,8 +873,8 @@ int main(int argc, char **argv) {
     mallopt(M_ARENA_MAX,1);
     mallopt(M_MMAP_THRESHOLD,32*1024*1024);
 #endif
-    /* TODO(macOS): no mallopt; malloc zones (the x86_64 nano zone sits at 0x600000000000)
-       can place those objects above 1 TiB. Memory layout work, phase 2. */
+    /* macOS: no mallopt, and malloc lives above 1 TiB (0x7f...): guest-visible host objects
+       come from runtime_guest_calloc instead (runtime.h). */
     if (argc == 2 && !strcmp(argv[1], "--vulkan-only")) return vulkan_smoke();
     char missing[128];
     if (argc == 2 && !strcmp(argv[1], "--cpu-features")) {

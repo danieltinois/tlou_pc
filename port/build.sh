@@ -98,6 +98,11 @@ Darwin)
     fi
     cp out/gpu/tlg-probe out/gpu/tlg-gpu-capabilities out/
     echo "Built $PWD/out/tlg-probe ($(lipo -archs out/tlg-probe))"
+    if [[ ${1:-} == --test ]]; then
+        tests=(guest-heap-test)
+        ninja -C out/gpu "${tests[@]}" >> out/gpu-build.log 2>&1 || { tail -40 out/gpu-build.log >&2; exit 1; }
+        for test in "${tests[@]}"; do out/gpu/"$test"; done
+    fi
     exit 0
     ;;
 esac

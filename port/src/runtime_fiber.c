@@ -73,14 +73,14 @@ static ABI int32_t fiber_initialize(void *guest,const char *name,FiberEntry entr
                                     void *context,uint64_t context_size,const void *option,uint32_t build_version) {
     (void)option; (void)build_version;
     if (!guest || !entry) return FIBER_ERR_NULL;
-    HostFiber *f=calloc(1,sizeof(*f));
+    HostFiber *f=runtime_guest_calloc(1,sizeof(*f));
     if (!f) return FIBER_ERR_INVALID;
     f->entry=entry; f->arg_on_initialize=arg_on_initialize;
     f->guest=guest; f->guest_context=context; f->context_size=context_size;
     snprintf(f->name,sizeof(f->name),"%s",name ? name : "");
     size_t size=(size_t)context_size;
     void *stack=context;
-    if (!stack || size<16384) { size=size<65536 ? 65536 : size; stack=malloc(size); }
+    if (!stack || size<16384) { size=size<65536 ? 65536 : size; stack=runtime_guest_calloc(1,size); }
     fiber_make_context(f,stack,size);
     ((GuestFiber *)guest)->magic=FIBER_MAGIC;
     ((GuestFiber *)guest)->host=f;
@@ -91,7 +91,7 @@ static ABI int32_t fiber_finalize(void *guest) {
     if (!f) return FIBER_ERR_INVALID;
     if (f->running) return FIBER_ERR_STATE;
     ((GuestFiber *)guest)->magic=0;
-    free(f); /* the context memory belongs to the game */
+    runtime_guest_free(f); /* the context memory belongs to the game */
     return 0;
 }
 static void fiber_enter(HostFiber *f,uint64_t arg) {
@@ -163,14 +163,14 @@ static ABI int32_t fiber_initialize(void *guest,const char *name,FiberEntry entr
                                     void *context,uint64_t context_size,const void *option,uint32_t build_version) {
     (void)context; (void)option; (void)build_version;
     if (!guest || !entry) return FIBER_ERR_NULL;
-    HostFiber *f=calloc(1,sizeof(*f));
+    HostFiber *f=runtime_guest_calloc(1,sizeof(*f));
     if (!f) return FIBER_ERR_INVALID;
     f->entry=entry; f->arg_on_initialize=arg_on_initialize;
     f->guest=guest; f->guest_context=context; f->context_size=context_size;
     snprintf(f->name,sizeof(f->name),"%s",name ? name : "");
     SIZE_T size=context_size<65536 ? 65536 : (SIZE_T)context_size;
     f->fiber=CreateFiber(size,fiber_trampoline,f);
-    if (!f->fiber) { free(f); return FIBER_ERR_INVALID; }
+    if (!f->fiber) { runtime_guest_free(f); return FIBER_ERR_INVALID; }
     ((GuestFiber *)guest)->magic=FIBER_MAGIC;
     ((GuestFiber *)guest)->host=f;
     return 0;
@@ -181,7 +181,7 @@ static ABI int32_t fiber_finalize(void *guest) {
     if (f->running) return FIBER_ERR_STATE;
     ((GuestFiber *)guest)->magic=0;
     DeleteFiber(f->fiber);
-    free(f);
+    runtime_guest_free(f);
     return 0;
 }
 static void fiber_enter(HostFiber *f,uint64_t arg) {

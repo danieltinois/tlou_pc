@@ -44,10 +44,10 @@ static Rwlock *find_locked(Rwlock *handle) {
     return NULL;
 }
 static int create_locked(Rwlock **out) {
-    Rwlock *r=calloc(1,sizeof(*r));
+    Rwlock *r=runtime_guest_calloc(1,sizeof(*r));
     if (!r) return ENOMEM;
     int e=pthread_rwlock_init(&r->native,NULL);
-    if (e) { free(r); return e; }
+    if (e) { runtime_guest_free(r); return e; }
     r->next=registry; registry=r; *out=r; ++created; return 0;
 }
 /* PS4 rwlock attributes only carry a reader/writer preference and pshared; host rwlocks keep their
@@ -55,13 +55,13 @@ static int create_locked(Rwlock **out) {
 #define RWATTR_MAGIC UINT64_C(0x5257415454520001)
 static ABI int32_t rwattr_init(uint64_t **attr) {
     if (!attr) return error(EINVAL);
-    uint64_t *a=malloc(2*sizeof(uint64_t));
+    uint64_t *a=runtime_guest_calloc(1,2*sizeof(uint64_t));
     if (!a) return error(ENOMEM);
     a[0]=RWATTR_MAGIC; a[1]=0; *attr=a; return 0;
 }
 static ABI int32_t rwattr_destroy(uint64_t **attr) {
     if (!attr || !*attr || (*attr)[0]!=RWATTR_MAGIC) return error(EINVAL);
-    (*attr)[0]=0; free(*attr); *attr=NULL; return 0;
+    (*attr)[0]=0; runtime_guest_free(*attr); *attr=NULL; return 0;
 }
 static ABI int32_t rw_init(Rwlock **out, void *const *attr, const char *name) {
     (void)name;
@@ -153,7 +153,7 @@ static ABI int32_t rw_destroy(Rwlock **handle) {
     if (!e) {
         Rwlock **link=&registry;
         while (*link!=r) link=&(*link)->next;
-        *link=r->next; free(r); *handle=(Rwlock *)(uintptr_t)1;
+        *link=r->next; runtime_guest_free(r); *handle=(Rwlock *)(uintptr_t)1;
     }
     pthread_mutex_unlock(&registry_lock); return error(e);
 }

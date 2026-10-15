@@ -102,6 +102,17 @@ void runtime_thread_keys_cleanup(void);
 /* Guest-visible errno values are FreeBSD's. */
 int32_t runtime_guest_errno(int host_errno);
 void *runtime_low_map(size_t size, int prot);
+/* Host objects whose address the guest keeps (handles, TLS, fiber stacks): zeroed, 64-byte
+ * aligned and below 1 TiB, since PS4 code packs pointers into 40 bits. Linux's heap is low
+ * already (probe.c mallopt) and so is Windows'; macOS malloc lives at 0x7f..., so there they
+ * come from runtime_low_map (runtime_memory.c). */
+#ifdef __APPLE__
+void *runtime_guest_calloc(size_t count, size_t size);
+void runtime_guest_free(void *p);
+#else
+#define runtime_guest_calloc calloc
+#define runtime_guest_free free
+#endif
 /* Windows: reserves the PS4 user address range as a placeholder (no-op elsewhere). */
 void runtime_memory_reserve(void);
 uintptr_t runtime_ajm_resolve(const char *name);

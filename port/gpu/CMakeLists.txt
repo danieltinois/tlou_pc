@@ -365,8 +365,19 @@ if (APPLE)
     target_link_options(tlg-probe PRIVATE -Wl,-stack_size,0x1000000)
     # The PS4 windows are zero-fill segments (src/runtime_memory.c), mapped by the kernel before
     # dyld, Rosetta or the main stack can take those addresses; no access until the guest maps.
-    target_link_options(tlg-probe PRIVATE -Wl,-segaddr,PS4LOW,0x200000000 -Wl,-segprot,PS4LOW,rwx,---
+    # Every executable that links the runtime carries them: without these flags the linker
+    # places PS4USER over Rosetta's guard and the process is killed before main.
+    set(TLG_MACOS_SEGMENTS -Wl,-segaddr,PS4LOW,0x200000000 -Wl,-segprot,PS4LOW,rwx,---
         -Wl,-segaddr,PS4USER,0x7000000000 -Wl,-segprot,PS4USER,rwx,---)
+    target_link_options(tlg-probe PRIVATE ${TLG_MACOS_SEGMENTS})
+    # tlg: runtime unit test (build.sh --test): the low heap for guest-visible host objects.
+    add_executable(guest-heap-test EXCLUDE_FROM_ALL ../tests/test_guest_heap.c ${TLG_RUNTIME}
+        ../src/cpu_check.c ../src/isa_rewrite.c ../src/isa_emulate.c)
+    set_target_properties(guest-heap-test PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
+    target_compile_options(guest-heap-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    target_include_directories(guest-heap-test PRIVATE .. ../src)
+    target_link_libraries(guest-heap-test PRIVATE tlggpu atrac9 PkgConfig::FREETYPE -pthread)
+    target_link_options(guest-heap-test PRIVATE ${TLG_MACOS_SEGMENTS})
     add_executable(tlg-gpu-capabilities ../tools/gpu_capabilities.c)
     target_include_directories(tlg-gpu-capabilities PRIVATE shadps4)
     target_link_libraries(tlg-gpu-capabilities PRIVATE Vulkan::Vulkan)
