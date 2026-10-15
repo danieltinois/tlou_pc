@@ -28,6 +28,13 @@ LOG_DIR = OUT_DIR / 'logs'
 PROBE = OUT_DIR / ('tlg-probe.exe' if os.name == 'nt' else 'tlg-probe')
 KEEP_LOGS = 30
 
+if sys.platform == 'darwin':
+    # tlg-probe is x86_64 under Rosetta 2, which runs AVX/AVX2 but reports them in CPUID only
+    # with this set before the process starts (--cpu-features and the game alike).
+    os.environ.setdefault('ROSETTA_ADVERTISE_AVX', '1')
+    # MoltenVK's manifest next to the probe (build.sh), for the probe's own Vulkan checks too.
+    os.environ.setdefault('VK_DRIVER_FILES', str(OUT_DIR / 'MoltenVK_icd.json'))
+
 # Game language: PS4 system language ids (sceSystemServiceParamGetInt LANG). The list the game
 # really ships voice/text for is still to be checked against the dump.
 GAME_LANGUAGES = {'en': 1, 'pt_BR': 17, 'es_LA': 20, 'fr_CA': 22}

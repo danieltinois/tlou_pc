@@ -97,6 +97,11 @@ Darwin)
         echo 'Build failed (full log: out/gpu-build.log)' >&2; exit 1
     fi
     cp out/gpu/tlg-probe out/gpu/tlg-gpu-capabilities out/
+    # MoltenVK next to the executable, where the GPU library points the Vulkan loader when
+    # VK_DRIVER_FILES is unset (vk_platform.cpp), as a packaged build will have it.
+    cp "$MACOS_DEPS/lib/libMoltenVK.dylib" out/
+    sed 's#"library_path"[^,]*#"library_path": "./libMoltenVK.dylib"#' \
+        "$MACOS_DEPS/share/vulkan/icd.d/MoltenVK_icd.json" > out/MoltenVK_icd.json
     echo "Built $PWD/out/tlg-probe ($(lipo -archs out/tlg-probe))"
     if [[ ${1:-} == --test ]]; then
         tests=(guest-heap-test)
