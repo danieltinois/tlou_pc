@@ -10,7 +10,7 @@
 #else
 #include <signal.h>
 #include <sys/mman.h>
-#include <ucontext.h>
+#include "ucontext_regs.h"
 #endif
 #include "isa_rewrite.h"
 
@@ -291,7 +291,7 @@ static void trap_handler(int sig, siginfo_t *info, void *context) {
     (void)sig;
     (void)info;
     ucontext_t *uc = context;
-    greg_t *g = uc->uc_mcontext.gregs;
+    greg_t *g = UC_GREGS(uc);
     static const int index[16] = {REG_RAX, REG_RCX, REG_RDX, REG_RBX, REG_RSP, REG_RBP, REG_RSI, REG_RDI,
                                   REG_R8,  REG_R9,  REG_R10, REG_R11, REG_R12, REG_R13, REG_R14, REG_R15};
     IsaRegs regs;

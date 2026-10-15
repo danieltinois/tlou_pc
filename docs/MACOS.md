@@ -4,7 +4,12 @@
 
 ## Português
 
-**Estado:** em desenvolvimento no fork `danieltinois/tlou_pc`, branch `feat/macos`. O `tlg-probe` compila, a janela, o Vulkan (MoltenVK) e a GPU do port sobem sem o jogo. O boot do jogo ainda não foi testado.
+**Estado:** em desenvolvimento no fork `danieltinois/tlou_pc`, branch `feat/macos`. **Nenhum código do jogo foi executado ainda** (falta testar com o dump). Comprovado sem o jogo, sob o Rosetta 2:
+
+- `build.sh --test`: o emulador de instruções, os stubs reescritos executando código x86 de verdade (desvio por `int3` no handler de sinal) e a proteção de red zone (falha de escrita → handler → reexecução) passam, assim como o heap baixo;
+- janela, view Metal, device e swapchain Retina; com `TLG_BACKGROUND_WARMUP=0`, o presenter apresenta frames: o MoltenVK registrou ~480 apresentações em 8 s a 60 Hz, 16 shaders SPIR-V→MSL e 11 pipelines **do próprio port** (overlay, pós-processamento), sem erros.
+
+Ainda **não** comprovado: carregar e executar o eboot, e qualquer shader **do jogo** (GCN traduzido pelo shadPS4) no Metal.
 
 ### Como funciona
 
@@ -64,10 +69,11 @@ O `tlou_run.py` define `ROSETTA_ADVERTISE_AVX=1` (o Rosetta só anuncia AVX com 
 - A imagem nula é uma view 2D RGBA8: slots 3D, cubo ou de formato inteiro sem recurso podem dar artefatos.
 - Locks com timeout usam trylock + espera curta; endereços fixos do jogo dentro da faixa do Rosetta não podem ser atendidos.
 - `exit()` com threads da GPU vivas aborta no macOS ("mutex lock failed"); use `_exit`.
+- No macOS, acesso a página mapeada mas protegida chega como **SIGBUS** (no Linux, SIGSEGV); só endereço não mapeado é SIGSEGV. O `probe.c` encaminha os dois ao rastreamento de páginas da GPU no Mac.
 
 ## English
 
-**Status:** in development in the `danieltinois/tlou_pc` fork, branch `feat/macos`. `tlg-probe` builds; the window, Vulkan (MoltenVK) and the port's GPU library come up without the game. Booting the game is not tested yet.
+**Status:** in development in the `danieltinois/tlou_pc` fork, branch `feat/macos`. **No game code has run yet** (needs the dump). Proven without the game under Rosetta 2: `build.sh --test` runs real x86 code (rewritten stubs, int3 and write-fault handling, which arrives as SIGBUS on macOS) and the low heap; the window, device and Retina swapchain come up, and with `TLG_BACKGROUND_WARMUP=0` MoltenVK logged ~480 presents in 8 s at 60 Hz, 16 SPIR-V→MSL shaders and 11 pipelines of the port's own (overlay, post-processing), without errors. Not proven: loading and running the eboot, and any game (GCN) shader on Metal.
 
 The port runs the eboot's x86-64 code in-process, so on Apple Silicon the whole process is **x86_64 under Rosetta 2**, with Vulkan → MoltenVK → Metal for graphics. See the table above for where each macOS difference lives.
 

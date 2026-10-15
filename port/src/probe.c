@@ -345,8 +345,14 @@ static void fault(int sig, siginfo_t *info, void *context) {
         pthread_sigmask(SIG_UNBLOCK, &unblock, NULL);
         siglongjmp(*recover, 1);
     }
-    /* GPU page tracking (write-protected guest pages) is resolved next. */
-    if (gpu_enabled && sig == SIGSEGV && tlggpu_handle_fault(context, info->si_addr)) {
+    /* GPU page tracking (write-protected guest pages) is resolved next. macOS raises SIGBUS, not
+     * SIGSEGV, for any access to a mapped but protected page (SIGSEGV only where nothing is mapped). */
+#ifdef __APPLE__
+    const int protection_fault = sig == SIGSEGV || sig == SIGBUS;
+#else
+    const int protection_fault = sig == SIGSEGV;
+#endif
+    if (gpu_enabled && protection_fault && tlggpu_handle_fault(context, info->si_addr)) {
         clobber_below(context);
         return;
     }

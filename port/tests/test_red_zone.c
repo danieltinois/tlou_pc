@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <ucontext.h>
+#include "ucontext_regs.h"
 #include "isa_rewrite.h"
 
 typedef uint64_t (ABI *Function)(uint32_t *page, uint64_t value);
@@ -28,7 +28,7 @@ static void handler(int sig, siginfo_t *info, void *context) {
     ucontext_t *uc = context;
     unsigned char *page = region + DATA;
     assert((unsigned char *)info->si_addr >= page && (unsigned char *)info->si_addr < page + PAGE);
-    uintptr_t rip = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP], rsp = (uintptr_t)uc->uc_mcontext.gregs[REG_RSP];
+    uintptr_t rip = (uintptr_t)UC_GREGS(uc)[REG_RIP], rsp = (uintptr_t)UC_GREGS(uc)[REG_RSP];
     uint64_t site = 0;
     in_stub = isa_red_zone_site_of_stub(table, rip, &site);
     stub_site = site;
@@ -138,6 +138,9 @@ int main(int argc, char **argv) {
     sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigemptyset(&sa.sa_mask);
     assert(sigaction(SIGSEGV, &sa, NULL) == 0);
+#ifdef __APPLE__
+    assert(sigaction(SIGBUS, &sa, NULL) == 0); /* macOS: a write to a read-only page is SIGBUS */
+#endif
     test_unprotected_loses_the_value();
     test_protected_functions();
     test_changed_bytes_skip_the_group();

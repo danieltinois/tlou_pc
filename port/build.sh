@@ -104,9 +104,12 @@ Darwin)
         "$MACOS_DEPS/share/vulkan/icd.d/MoltenVK_icd.json" > out/MoltenVK_icd.json
     echo "Built $PWD/out/tlg-probe ($(lipo -archs out/tlg-probe))"
     if [[ ${1:-} == --test ]]; then
-        tests=(guest-heap-test)
+        tests=(guest-heap-test isa-emulate-test isa-stub-test red-zone-test)
         ninja -C out/gpu "${tests[@]}" >> out/gpu-build.log 2>&1 || { tail -40 out/gpu-build.log >&2; exit 1; }
-        for test in "${tests[@]}"; do out/gpu/"$test"; done
+        out/gpu/guest-heap-test
+        out/gpu/isa-emulate-test
+        out/gpu/isa-stub-test tests/data/isa_fixture.bin 2>/dev/null | tail -1
+        out/gpu/red-zone-test tests/data/red_zone_image.bin tests/data/red_zone_table.bin 2>/dev/null | tail -1
     fi
     exit 0
     ;;
