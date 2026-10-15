@@ -103,6 +103,12 @@ public:
     }
 
     /// Returns true if anisotropic filtering is supported
+    /// tlg: descriptors may be VK_NULL_HANDLE (VK_EXT_robustness2 nullDescriptor); without it
+    /// the rasterizer binds real null resources (macOS).
+    bool IsNullDescriptorSupported() const {
+        return null_descriptor;
+    }
+
     bool IsAnisotropicFilteringSupported() const {
         return features.samplerAnisotropy;
     }
@@ -559,6 +565,8 @@ private:
     TracyVkCtx profiler_context{};
     u32 queue_family_index{0};
     bool custom_border_color{};
+    bool robust_buffer_access2{true}; ///< tlg: optional on macOS (MoltenVK), required elsewhere
+    bool null_descriptor{true};       ///< tlg: optional on macOS (MoltenVK), required elsewhere
     bool fragment_shader_barycentric{};
     bool amd_shader_explicit_vertex_parameter{};
     bool depth_clip_control{};

@@ -341,6 +341,20 @@ private:
     u64 motion_geometry{};    ///< vertex-stream identity of the current direct draw
     bool gbuffer_draw = false;
     std::unique_ptr<TemporalUpscaler> upscaler; // tlg: FSR (docs/upscaler.md)
+    // tlg: bound where a descriptor would be VK_NULL_HANDLE when the device has no
+    // nullDescriptor (MoltenVK): a zeroed buffer and a zeroed 1x1 RGBA8 2D image in eGeneral.
+    struct NullResources {
+        std::unique_ptr<VideoCore::Buffer> buffer;
+        VideoCore::UniqueImage image;
+        vk::UniqueImageView view;
+    } null_resources;
+    void CreateNullResources();
+    vk::Buffer NullBuffer() const {
+        return null_resources.buffer->Handle();
+    }
+    vk::ImageView NullImageView() const {
+        return *null_resources.view;
+    }
     std::array<float, 2> draw_jitter{};         ///< viewport offset of the current draw, pixels
     std::array<float, 2> target_scale{1.0f, 1.0f}; ///< pass drawn into the upscaler's output-size images
     const bool host_markers_enabled;
