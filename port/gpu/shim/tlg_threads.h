@@ -10,6 +10,8 @@
 #ifdef _WIN32
 #include <bit>
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <pthread/qos.h>
 #else
 #include <sched.h>
 #include <sys/resource.h>
@@ -30,6 +32,17 @@ inline unsigned Available() {
 /// The calling thread only runs when cores are otherwise idle (lowest Windows priority).
 inline void MakeBackground() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_IDLE);
+}
+#elif defined(__APPLE__)
+/// Hardware threads available to the process (macOS has no affinity masks).
+inline unsigned Available() {
+    return compat_cpu_count();
+}
+
+/// The calling thread yields to the game's threads: the background QoS class, which on Apple
+/// Silicon keeps it on the efficiency cores.
+inline void MakeBackground() {
+    pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
 }
 #else
 

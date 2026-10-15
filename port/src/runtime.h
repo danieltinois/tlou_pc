@@ -10,6 +10,7 @@
 typedef tlg_jmp_buf sigjmp_buf;
 #define sigsetjmp(buffer, save) tlg_setjmp(buffer)
 #else
+#include "compat_mac.h"
 #include <setjmp.h>
 #endif
 /* Recovery point for speculative guest memory reads on this thread (probe.c fault handler). */

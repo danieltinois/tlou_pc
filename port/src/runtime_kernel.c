@@ -246,6 +246,16 @@ static ABI int32_t guest_getrusage(int who,GuestRusage *out) {
     compat_cpu_times(who,&user,&kernel);
     out->utime=(GuestTimeval){user/1000000,user%1000000};
     out->stime=(GuestTimeval){kernel/1000000,kernel%1000000};
+#elif defined(__APPLE__)
+    uint64_t user=0,system=0;
+    if (who==0) {
+        struct rusage r;
+        getrusage(RUSAGE_SELF,&r);
+        user=(uint64_t)r.ru_utime.tv_sec*1000000+(uint64_t)r.ru_utime.tv_usec;
+        system=(uint64_t)r.ru_stime.tv_sec*1000000+(uint64_t)r.ru_stime.tv_usec;
+    } else compat_thread_times(compat_thread_self(),&user,&system); /* no RUSAGE_THREAD */
+    out->utime=(GuestTimeval){(int64_t)(user/1000000),(int64_t)(user%1000000)};
+    out->stime=(GuestTimeval){(int64_t)(system/1000000),(int64_t)(system%1000000)};
 #else
     struct rusage r;
     getrusage(who==0 ? RUSAGE_SELF : RUSAGE_THREAD,&r);

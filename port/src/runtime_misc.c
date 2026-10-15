@@ -20,7 +20,7 @@
 #include <unistd.h>
 #ifndef _WIN32
 #include <sys/random.h>
-#include <ucontext.h>
+#include "ucontext_regs.h"
 #else
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN

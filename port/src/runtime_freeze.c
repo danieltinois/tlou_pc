@@ -25,7 +25,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <signal.h>
-#include <ucontext.h>
+#include "ucontext_regs.h"
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
@@ -201,7 +201,7 @@ static void capture_signal(int sig, siginfo_t *info, void *context) {
     int saved = errno;
     if (__atomic_load_n(&capture_tid, __ATOMIC_ACQUIRE) == gettid()) {
         Capture *c = __atomic_load_n(&capture_out, __ATOMIC_ACQUIRE);
-        const greg_t *g = ((ucontext_t *)context)->uc_mcontext.gregs;
+        const greg_t *g = UC_GREGS((ucontext_t *)context);
         c->rip = (uintptr_t)g[REG_RIP]; c->rsp = (uintptr_t)g[REG_RSP]; c->rbp = (uintptr_t)g[REG_RBP];
         c->frames = walk_frames(c->rbp, c->chain, MAX_FRAMES);
         c->captured = 1;

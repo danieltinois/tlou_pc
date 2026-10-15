@@ -398,6 +398,14 @@ void VideoOutDriver::Flip(const Request& req) {
             };
             gpu_ns = ns(kernel) + ns(user);
         }
+#elif defined(__APPLE__)
+        // tlg: macOS has no per-thread clock id either; the GPU thread's Mach port.
+        if (const unsigned long port = TlgStats::gpu_thread_id.load()) {
+            if (u64 user_us, sys_us;
+                compat_thread_times(static_cast<mach_port_t>(port), &user_us, &sys_us) == 0) {
+                gpu_ns = (user_us + sys_us) * 1000;
+            }
+        }
 #else
         if (const int clock = TlgStats::gpu_thread_clock.load(); clock != -1) {
             timespec ts{};

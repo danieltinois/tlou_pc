@@ -41,6 +41,18 @@ asm(".section .rdata,\"dr\"\n"
     ".global tlg_font_ttf_end\n"
     "tlg_font_ttf_end:\n"
     ".text\n");
+#elif defined(__APPLE__)
+// Mach-O: read-only data is __TEXT,__const and C symbols carry a leading underscore.
+asm(".section __TEXT,__const\n"
+    ".balign 16\n"
+    ".private_extern _tlg_font_ttf\n"
+    ".globl _tlg_font_ttf\n"
+    "_tlg_font_ttf:\n"
+    ".incbin \"" TLG_FONT_PATH "\"\n"
+    ".private_extern _tlg_font_ttf_end\n"
+    ".globl _tlg_font_ttf_end\n"
+    "_tlg_font_ttf_end:\n"
+    ".text\n");
 #else
 asm(".section .rodata\n"
     ".balign 16\n"

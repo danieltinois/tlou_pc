@@ -24,7 +24,7 @@
 #include <malloc.h>
 #include <unistd.h>
 #include <signal.h>
-#include <ucontext.h>
+#include "ucontext_regs.h"
 #include <fcntl.h>
 #include <dlfcn.h>
 #include <execinfo.h>
@@ -289,7 +289,7 @@ static void clobber_thread_init(void) {
     if (ss.ss_sp != MAP_FAILED) sigaltstack(&ss, NULL);
 }
 static void clobber_below(ucontext_t *uc) {
-    uintptr_t rip = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP], rsp = (uintptr_t)uc->uc_mcontext.gregs[REG_RSP];
+    uintptr_t rip = (uintptr_t)UC_GREGS(uc)[REG_RIP], rsp = (uintptr_t)UC_GREGS(uc)[REG_RSP];
     if (!clobber_red_zone || rip < (uintptr_t)image || rip >= guest_code_end) return;
     unsigned bytes = clobber_red_zone;
     stack_t current;
@@ -313,7 +313,7 @@ static void clobber_below(ucontext_t *uc) {
 static void fault(int sig, siginfo_t *info, void *context) {
     if (sig == SIGTRAP && isa_table) {
         /* An int3 ISA site (RIP is past the CC byte); any other trap ends in the report below. */
-        greg_t *g = ((ucontext_t *)context)->uc_mcontext.gregs;
+        greg_t *g = UC_GREGS((ucontext_t *)context);
         IsaRegs regs;
         uintptr_t rip;
         for (int i = 0; i < 16; ++i) regs.gpr[i] = (uint64_t)g[isa_gregs[i]];
@@ -346,7 +346,7 @@ static void fault(int sig, siginfo_t *info, void *context) {
     }
     /* The process is terminating: dladdr/snprintf are acceptable here. */
     ucontext_t *uc = context;
-    uintptr_t rip = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
+    uintptr_t rip = (uintptr_t)UC_GREGS(uc)[REG_RIP];
     char line[512];
     Dl_info where;
     int site = isa_table ? isa_rewrite_site_of_stub(isa_table, rip) : -1;
@@ -374,7 +374,7 @@ static void fault(int sig, siginfo_t *info, void *context) {
         struct iovec lo = {op, 2}, ro = {(void *)rip, 2};
         if (process_vm_readv(getpid(), &lo, 1, &ro, 1, 0) == 2 && op[0] == 0xcd && op[1] == 0x41) {
             static char stack[0x4000];
-            uintptr_t rsp = (uintptr_t)uc->uc_mcontext.gregs[REG_RSP];
+            uintptr_t rsp = (uintptr_t)UC_GREGS(uc)[REG_RSP];
             struct iovec ls = {stack, sizeof(stack) - 1}, rs = {(void *)rsp, sizeof(stack) - 1};
             ssize_t got = process_vm_readv(getpid(), &ls, 1, &rs, 1, 0);
             for (ssize_t i = 0; got > 0 && i + 8 < got; ++i) {
@@ -392,11 +392,11 @@ static void fault(int sig, siginfo_t *info, void *context) {
     }
     /* Guest call chain: the eboot keeps frame pointers, so follow rbp (reads cannot fault). */
     if (rip - (uintptr_t)image < 0x10000000) {
-        uintptr_t rbp = (uintptr_t)uc->uc_mcontext.gregs[REG_RBP];
+        uintptr_t rbp = (uintptr_t)UC_GREGS(uc)[REG_RBP];
         static const char *regs[] = {"rax","rbx","rcx","rdx","rsi","rdi","rbp","rsp"};
         const int ids[] = {REG_RAX,REG_RBX,REG_RCX,REG_RDX,REG_RSI,REG_RDI,REG_RBP,REG_RSP};
         for (int r = 0; r < 8; ++r) {
-            snprintf(line, sizeof(line), "  %s=%016llx%s", regs[r], (unsigned long long)uc->uc_mcontext.gregs[ids[r]], r == 3 || r == 7 ? "\n" : " ");
+            snprintf(line, sizeof(line), "  %s=%016llx%s", regs[r], (unsigned long long)UC_GREGS(uc)[ids[r]], r == 3 || r == 7 ? "\n" : " ");
             ssize_t written_=write(2, line, strlen(line)); (void)written_;
         }
         for (int depth = 0; depth < 24 && rbp; ++depth) {
@@ -436,11 +436,11 @@ static void write_hex(char *out, uint64_t v) {
 }
 static void dump_frames(ucontext_t *uc) {
     char line[] = "  tid=0000000000000000 rip=0000000000000000 image-relative=0000000000000000 host-relative=0000000000000000\n";
-    uintptr_t rip=(uintptr_t)uc->uc_mcontext.gregs[REG_RIP], rbp=(uintptr_t)uc->uc_mcontext.gregs[REG_RBP];
+    uintptr_t rip=(uintptr_t)UC_GREGS(uc)[REG_RIP], rbp=(uintptr_t)UC_GREGS(uc)[REG_RBP];
     uint64_t tid=(uint64_t)gettid();
     /* First argument register: the lock address when a thread waits on a futex. */
     char arg[]="  tid=0000000000000000 rdi=0000000000000000\n";
-    write_hex(arg+6,tid); write_hex(arg+27,(uint64_t)uc->uc_mcontext.gregs[REG_RDI]);
+    write_hex(arg+6,tid); write_hex(arg+27,(uint64_t)UC_GREGS(uc)[REG_RDI]);
     { ssize_t written_=write(2,arg,sizeof(arg)-1); (void)written_; }
     {   /* Thread name (the process is terminating: stdio-free reads are enough). */
         char path[64], name[32]={0};

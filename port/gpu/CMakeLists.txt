@@ -233,6 +233,8 @@ if (WIN32)
     target_link_libraries(tlggpu PUBLIC Vulkan::Vulkan ws2_32 bcrypt ntdll synchronization winmm pdh)
 elseif (APPLE)
     # SDL3 owns the window and the Metal layer; Vulkan goes through the loader to MoltenVK.
+    # compat_mac.h: gettid, sched_getcpu, thread CPU times (like tlg_win_compat.h on Windows).
+    target_compile_options(tlggpu PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/../src/compat_mac.h)
     target_link_libraries(tlggpu PUBLIC Vulkan::Vulkan)
 else()
     target_link_libraries(tlggpu PUBLIC PkgConfig::X11)

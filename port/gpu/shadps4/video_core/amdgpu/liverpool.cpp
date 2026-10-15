@@ -104,7 +104,10 @@ void Liverpool::ProcessCommands() {
 
 void Liverpool::Process(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
-#ifndef _WIN32
+#ifdef __APPLE__
+    // tlg: no per-thread clock id on macOS; the stats read the thread's Mach port instead.
+    TlgStats::gpu_thread_id.store(compat_thread_self());
+#elif !defined(_WIN32)
     if (clockid_t clock; pthread_getcpuclockid(pthread_self(), &clock) == 0) {
         TlgStats::gpu_thread_clock.store(static_cast<int>(clock));
     }
@@ -112,7 +115,7 @@ void Liverpool::Process(std::stop_token stoken) {
     TlgStats::gpu_thread_id.store(GetCurrentThreadId());
 #endif
     gpu_id = std::this_thread::get_id();
-#if defined(__linux__) || defined(_WIN32)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
     gpu_tid = gettid();
 #endif
 
@@ -1345,7 +1348,12 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
     }
     if (seq != NoSeq && TlgStats::enabled) {
         TlgStats::submissions.fetch_add(1, std::memory_order_relaxed);
-#ifndef _WIN32 // tlg: per-thread rusage statistics are Linux-only
+#ifdef __APPLE__ // tlg: user/system time only (no switch or fault counts per thread)
+        if (u64 user_us, sys_us; compat_thread_times(compat_thread_self(), &user_us, &sys_us) == 0) {
+            TlgStats::gpu_user_us.store(user_us, std::memory_order_relaxed);
+            TlgStats::gpu_sys_us.store(sys_us, std::memory_order_relaxed);
+        }
+#elif !defined(_WIN32) // tlg: per-thread rusage statistics are Linux-only
         if (rusage usage{}; getrusage(RUSAGE_THREAD, &usage) == 0) {
             TlgStats::gpu_user_us.store(u64(usage.ru_utime.tv_sec) * 1000000 + usage.ru_utime.tv_usec,
                                        std::memory_order_relaxed);

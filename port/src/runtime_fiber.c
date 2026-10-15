@@ -4,6 +4,13 @@
  * fibers on Windows). First written for Gravity Rush 2; GetSelf/GetInfo/Rename/OptParam added
  * for The Last of Us Remastered, whose job system runs on fibers.
  */
+#ifdef __APPLE__
+/* The ucontext routines are deprecated on macOS and only declared for X/Open; Darwin's own
+ * API stays visible with _DARWIN_C_SOURCE. They still work on x86_64 (and under Rosetta 2). */
+#define _XOPEN_SOURCE 700
+#define _DARWIN_C_SOURCE
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #define _GNU_SOURCE
 #include "runtime.h"
 #include <stdio.h>
