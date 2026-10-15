@@ -4,6 +4,8 @@
  * Windows: a pagefile-backed section plays the memfd's part, and the PS4 user range is
  * reserved as one placeholder that views of the section replace (VirtualAlloc2/MapViewOfFile3,
  * as shadPS4 does); see the "host mappings" section below.
+ * macOS: a POSIX shared memory object plays the memfd's part, and the executable's own
+ * zero-fill segments reserve the PS4 windows before dyld, Rosetta or the main stack load.
  * Guest addresses are placed below 1 TiB (PS4 user range): GPU descriptors
  * encode 40-bit addresses, so host-default 0x7f... addresses would not fit. */
 #define _GNU_SOURCE
@@ -23,6 +25,10 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#endif
 /* sceKernelGetDirectMemorySize on retail PS4: 5056 MiB. TLG_DMEM_MB changes it: higher for the
  * resolution patches above 1080p (about 4 GiB more; run.sh sets it), lower for games that check
  * the exact size of their SDK's retail console (The Last of Us Remastered: 4608 MiB on a base
@@ -40,7 +46,16 @@ static uint64_t pool_size_bytes(void) {
 #define POOL_SIZE pool_size_bytes()
 #define FLEXIBLE_SIZE (UINT64_C(448) * 1024 * 1024)
 #define PAGE UINT64_C(16384)
+#ifdef __APPLE__
+/* Rosetta 2 keeps [0xfc0000000,0x7000000000) as a permanent guard (mapping over it fails, a
+ * segment there kills the process), so the user range starts above it, still below 1 TiB.
+ * Host-owned low memory (runtime_low_map) stays below the guard. */
+#define USER_MIN UINT64_C(0x7000000000)
+#define LOW_MAX UINT64_C(0xfc0000000)
+#else
 #define USER_MIN UINT64_C(0x1000000000)
+#define LOW_MAX USER_MIN
+#endif
 #define USER_MAX UINT64_C(0xfc00000000)
 /* System-reserved window (shim AddressSpace::SystemReservedVirtualBase/Size). Gnm places fixed
  * objects there, e.g. the tessellation factor ring at 0x7f0000000 that The Last Guardian maps by
@@ -294,6 +309,73 @@ static int pool(void) {
     backing_base=MapViewOfFile3(section,GetCurrentProcess(),NULL,0,bytes,0,PAGE_READWRITE,NULL,0);
     return backing_base ? 0 : -1;
 }
+#elif defined(__APPLE__)
+/* ---- host mappings (macOS) ----
+ * The PS4 windows are zero-fill segments of tlg-probe itself (gpu/CMakeLists.txt: -segaddr,
+ * no access until mapped), so nothing of the host is ever placed there: macOS hands out
+ * addresses bottom-up, right where the PS4 ranges are. Guest views replace parts of them with
+ * MAP_FIXED; unmapping puts PROT_NONE back instead of returning the range to the system. */
+__asm__(".zerofill PS4LOW,ps4low,_tlg_ps4_low_window,0x600000000,12\n"     /* [0x200000000,0x800000000) */
+        ".zerofill PS4USER,ps4user,_tlg_ps4_user_range,0x8c00000000,12\n"); /* [USER_MIN,USER_MAX) */
+_Static_assert(SYSTEM_RESERVED_MAX-LOW_WINDOW_MIN==UINT64_C(0x600000000),"PS4LOW segment size");
+_Static_assert(USER_MAX-USER_MIN==UINT64_C(0x8c00000000),"PS4USER segment size");
+static int reserved_window(uintptr_t a, uint64_t size) {
+    return (a>=LOW_WINDOW_MIN && a+size<=SYSTEM_RESERVED_MAX) || (a>=USER_MIN && a+size<=USER_MAX);
+}
+/* The main executable's segment named name (its load commands, as dyld mapped them). */
+static const struct segment_command_64 *own_segment(const char *name) {
+    const struct mach_header_64 *header=(const struct mach_header_64 *)_dyld_get_image_header(0);
+    const struct load_command *command=(const struct load_command *)(header+1);
+    for (uint32_t i=0;i<header->ncmds;++i) {
+        if (command->cmd==LC_SEGMENT_64 && !strncmp(((const struct segment_command_64 *)command)->segname,name,16))
+            return (const struct segment_command_64 *)command;
+        command=(const struct load_command *)((const char *)command+command->cmdsize);
+    }
+    return NULL;
+}
+/* The segments are placed by the linker flags: stop early if a build lost them. */
+void runtime_memory_reserve(void) {
+    static const struct { const char *name; uint64_t start, end; } want[]={
+        {"PS4LOW",LOW_WINDOW_MIN,SYSTEM_RESERVED_MAX},{"PS4USER",USER_MIN,USER_MAX}};
+    for (size_t i=0;i<2;++i) {
+        const struct segment_command_64 *seg=own_segment(want[i].name);
+        if (!seg || seg->vmaddr!=want[i].start || seg->vmaddr+seg->vmsize!=want[i].end) {
+            fprintf(stderr,"STOP: segment %s does not reserve [0x%" PRIx64 ",0x%" PRIx64 ") (link flags)\n",
+                    want[i].name,want[i].start,want[i].end);
+            exit(21);
+        }
+    }
+}
+static int system_window_reserved(void) { return 1; }
+/* Direct memory occupies [0,POOL_SIZE) of the object, flexible memory [POOL_SIZE,+FLEX_SPAN).
+ * The host's own view sits above 1 TiB: the guest never sees it. */
+static int pool(void) {
+    if (pool_fd>=0) return 0;
+    char name[32];
+    snprintf(name,sizeof(name),"/tlg-memory-%d",(int)getpid());
+    pool_fd=shm_open(name,O_RDWR|O_CREAT|O_EXCL,0600);
+    if (pool_fd<0) return -1;
+    shm_unlink(name); /* anonymous from here on, like a memfd */
+    if (ftruncate(pool_fd,(off_t)(POOL_SIZE+FLEX_SPAN))) return -1;
+    void *view=mmap((void *)UINT64_C(0x20000000000),POOL_SIZE+FLEX_SPAN,PROT_READ|PROT_WRITE,MAP_SHARED,pool_fd,0);
+    if (view==MAP_FAILED) return -1;
+    backing_base=view;
+    return 0;
+}
+static int host_map(uintptr_t address, uint64_t size, int prot, int reserved, uint64_t phys) {
+    void *mapped = !reserved
+        ? mmap((void *)address,size,prot,MAP_SHARED|MAP_FIXED,pool_fd,(off_t)phys)
+        : mmap((void *)address,size,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED,-1,0);
+    return mapped==MAP_FAILED ? -1 : 0;
+}
+static int host_unmap(uintptr_t address, uint64_t size) {
+    if (!reserved_window(address,size)) return munmap((void *)address,size);
+    return mmap((void *)address,size,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED,-1,0)==MAP_FAILED ? -1 : 0;
+}
+static int host_protect(uintptr_t address, uint64_t size, int prot) { return mprotect((void *)address,size,prot); }
+/* Released pages read as zero when reused. No hole punching in a shared memory object, so they
+ * are cleared (as on Windows): correct, but the memory is not returned to the system. */
+static void host_discard(uint64_t phys, uint64_t size) { memset(backing_base+phys,0,size); }
 #else
 /* Direct memory occupies [0,POOL_SIZE) of the memfd, flexible memory [POOL_SIZE,+FLEX_SPAN). */
 static int pool(void) {
@@ -730,7 +812,7 @@ uintptr_t runtime_memory_resolve(const char *name) {
     return RUNTIME_LOOKUP(exports,name);
 }
 /* Host-owned memory the guest can see (image, stacks, trampolines) lives in
- * [LOW_MIN, USER_MIN): PS4 code packs pointers into 40-bit fields. */
+ * [LOW_MIN, LOW_MAX): PS4 code packs pointers into 40-bit fields. */
 #define LOW_MIN UINT64_C(0x0800000000)
 static uintptr_t low_next=LOW_MIN;
 void *runtime_low_map(size_t size, int prot) {
@@ -738,7 +820,7 @@ void *runtime_low_map(size_t size, int prot) {
     write_lock();
 #ifdef _WIN32
     void *p=NULL;
-    while (!p && low_next+size<=USER_MIN) {
+    while (!p && low_next+size<=LOW_MAX) {
         p=VirtualAlloc((void *)low_next,size,MEM_RESERVE|MEM_COMMIT,win_prot(prot));
         low_next+=size+UINT64_C(65536); /* unmapped gap catches overruns; allocation granularity */
     }
@@ -746,8 +828,14 @@ void *runtime_low_map(size_t size, int prot) {
     return p;
 #else
     void *p=MAP_FAILED;
-    while (low_next+size<=USER_MIN) {
+    while (low_next+size<=LOW_MAX) {
+#ifdef __APPLE__
+        /* No MAP_FIXED_NOREPLACE: a hint, and anything placed elsewhere goes back. */
+        p=mmap((void *)low_next,size,prot,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+        if (p!=MAP_FAILED && p!=(void *)low_next) { munmap(p,size); p=MAP_FAILED; }
+#else
         p=mmap((void *)low_next,size,prot,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
+#endif
         low_next+=size+PAGE; /* unmapped gap catches overruns */
         if (p!=MAP_FAILED) break;
     }

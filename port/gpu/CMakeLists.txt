@@ -363,6 +363,10 @@ if (APPLE)
     target_link_libraries(tlg-probe PRIVATE tlggpu atrac9 PkgConfig::FREETYPE -pthread)
     # The guest main thread runs on the process stack: 16 MiB, like Windows.
     target_link_options(tlg-probe PRIVATE -Wl,-stack_size,0x1000000)
+    # The PS4 windows are zero-fill segments (src/runtime_memory.c), mapped by the kernel before
+    # dyld, Rosetta or the main stack can take those addresses; no access until the guest maps.
+    target_link_options(tlg-probe PRIVATE -Wl,-segaddr,PS4LOW,0x200000000 -Wl,-segprot,PS4LOW,rwx,---
+        -Wl,-segaddr,PS4USER,0x7000000000 -Wl,-segprot,PS4USER,rwx,---)
     add_executable(tlg-gpu-capabilities ../tools/gpu_capabilities.c)
     target_include_directories(tlg-gpu-capabilities PRIVATE shadps4)
     target_link_libraries(tlg-gpu-capabilities PRIVATE Vulkan::Vulkan)

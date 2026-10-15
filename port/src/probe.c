@@ -139,8 +139,9 @@ static uintptr_t trace_stub(uint64_t index, uintptr_t target) {
     return trace_made[index] = (uintptr_t)t;
 }
 #ifndef _WIN32
-/* enter_on_stack(entry, arg0, arg1, stack_top): call entry(arg0,arg1) on a new stack. */
-void enter_on_stack(void *entry, void *arg0, void *arg1, void *top);
+/* enter_on_stack(entry, arg0, arg1, stack_top): call entry(arg0,arg1) on a new stack.
+ * The asm label keeps the symbol name as written (Mach-O would add a leading underscore). */
+void enter_on_stack(void *entry, void *arg0, void *arg1, void *top) __asm__("enter_on_stack");
 __asm__(".text\n.globl enter_on_stack\nenter_on_stack:\n"
         " push %rbp\n mov %rsp,%rbp\n and $-16,%rcx\n mov %rcx,%rsp\n"
         " mov %rdi,%rax\n mov %rsi,%rdi\n mov %rdx,%rsi\n call *%rax\n"
@@ -254,8 +255,11 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 static LONG WINAPI unhandled_fault(EXCEPTION_POINTERS *info) { return fatal_exception(info); }
+#endif
+#if defined(_WIN32) || defined(__APPLE__)
 /* Guest code reads its TCB with `mov reg, gs:[0]` (link_*.py rewrote fs:[0]); on Windows
- * the displacement becomes the TEB TLS slot that holds the guest TCB (runtime_thread.c). */
+ * the displacement becomes the TEB TLS slot that holds the guest TCB, on macOS the pthread
+ * key's slot in the TSD array (runtime_thread.c). */
 uint32_t runtime_thread_tcb_offset(void);
 static uint64_t patch_tcb_loads(const Segment *segments, uint64_t count) {
     /* gs, REX.W (48/4c), 8b, ModRM mod=00 rm=100 (any register), SIB 25, disp32 0. */
@@ -889,6 +893,9 @@ int main(int argc, char **argv) {
      * TCB needs one of the 64 TEB TLS slots before DLLs (Vulkan drivers) take them. */
     runtime_memory_reserve();
     runtime_thread_tcb_offset();
+#elif defined(__APPLE__)
+    runtime_memory_reserve();    /* the PS4 windows: segments of this executable, checked */
+    runtime_thread_tcb_offset(); /* the guest TCB key, checked against a real gs load */
 #endif
     int cpu_only = 0, strict_imports = 0, check_imports = 0;
     unsigned timeout_seconds = 10;
@@ -1224,6 +1231,9 @@ int main(int argc, char **argv) {
     }
 #ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
+#elif defined(__APPLE__)
+    printf("Guest TCB loads redirected to pthread key slot gs:[0x%x]: %" PRIu64 "\n",
+           runtime_thread_tcb_offset(), patch_tcb_loads(segments, ns));
 #endif
     if (isa_table) {
         isa_table->protect_red_zone = red_zone_on;

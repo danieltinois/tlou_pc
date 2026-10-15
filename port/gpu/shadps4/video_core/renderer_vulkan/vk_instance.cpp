@@ -310,6 +310,10 @@ bool Instance::CreateDevice() {
     };
 
     // Required
+#ifdef __APPLE__
+    // tlg: a portability-subset device (MoltenVK) must have the extension enabled.
+    add_extension("VK_KHR_portability_subset");
+#endif
     ASSERT_MSG(add_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME),
                "Required Vulkan extension unavailable: {}", VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     ASSERT_MSG(add_extension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME),

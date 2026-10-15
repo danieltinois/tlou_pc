@@ -4,7 +4,8 @@
  * keeps FS. Priorities/affinity are recorded, not enforced by a PS4 scheduler.
  * Windows: GS is the TEB and cannot be moved. The guest TCB lives in a TLS slot of the TEB
  * instead, and the loader rewrites the load to `mov rax, gs:[0x1480+8*slot]` (TlsSlots),
- * the same 9-byte instruction with another displacement. */
+ * the same 9-byte instruction with another displacement.
+ * macOS: GS is the pthread TSD array, so the guest TCB is a pthread key's value at gs:[8*key]. */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include <stdio.h>
@@ -21,7 +22,9 @@
 #else
 #include <sys/syscall.h>
 #include <sys/mman.h>
+#ifndef __APPLE__
 #include <asm/prctl.h>
+#endif
 #endif
 #define ERR(n) ((int32_t)(UINT32_C(0x80020000)|(n)))
 #define ATTR_MAGIC UINT32_C(0x41545452)
@@ -85,6 +88,31 @@ static void set_gs(void *base) {
     if (!TlsSetValue(tls_slot,base)) { fprintf(stderr,"STOP: TlsSetValue failed (%lu)\n",GetLastError()); exit(21); }
 }
 #define tls_block_alloc(size) _aligned_malloc(size,64)
+#elif defined(__APPLE__)
+/* The TSD array holds every key (PTHREAD_KEYS_MAX 512) at gs:[8*key]. Checked once against a
+ * real gs load, so a change of that layout stops here instead of corrupting guest memory. */
+static pthread_key_t tls_key;
+static pthread_once_t tls_once=PTHREAD_ONCE_INIT;
+static void tls_key_create(void) {
+    if (pthread_key_create(&tls_key,NULL)) { perror("STOP: pthread_key_create"); exit(21); }
+    void *const sentinel=(void *)&tls_key, *seen;
+    pthread_setspecific(tls_key,sentinel);
+    __asm__ volatile("mov %%gs:(%1), %0" : "=r"(seen) : "r"((uintptr_t)tls_key*8));
+    pthread_setspecific(tls_key,NULL);
+    if (seen!=sentinel) {
+        fprintf(stderr,"STOP: pthread key %lu is not at gs:[0x%lx]\n",(unsigned long)tls_key,(unsigned long)tls_key*8);
+        exit(21);
+    }
+}
+uint32_t runtime_thread_tcb_offset(void) {
+    pthread_once(&tls_once,tls_key_create);
+    return 8*(uint32_t)tls_key;
+}
+static void set_gs(void *base) {
+    runtime_thread_tcb_offset();
+    if (pthread_setspecific(tls_key,base)) { fputs("STOP: pthread_setspecific failed\n",stderr); exit(21); }
+}
+#define tls_block_alloc(size) aligned_alloc(64,size)
 #else
 static void set_gs(void *base) {
     if (syscall(SYS_arch_prctl,ARCH_SET_GS,(unsigned long)base)) { perror("STOP: arch_prctl(ARCH_SET_GS)"); exit(21); }

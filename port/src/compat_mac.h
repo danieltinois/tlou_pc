@@ -17,8 +17,12 @@
 #include <sys/uio.h>
 #include <signal.h>
 #include <unistd.h>
+/* Mach declares generic global names: its thread_create (unused here) would clash with the
+ * runtime's own static thread_create, so it is declared under another name. */
+#define thread_create compat_mach_thread_create
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#undef thread_create
 /* <mach/vm_param.h> macros that would rewrite this project's own functions (probe.c round_page). */
 #undef round_page
 #undef trunc_page
