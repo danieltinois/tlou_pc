@@ -36,8 +36,9 @@ static void host_check(int e) {
     if (e) { fprintf(stderr,"STOP: semaphore host error %d\n",e); exit(21); }
 }
 /* Waits use this clock for their deadlines. winpthreads condition variables accept only
- * CLOCK_REALTIME (pthread_condattr_setclock(CLOCK_MONOTONIC) fails with EINVAL). */
-#ifdef _WIN32
+ * CLOCK_REALTIME (pthread_condattr_setclock(CLOCK_MONOTONIC) fails with EINVAL); macOS has
+ * no pthread_condattr_setclock and its condition variables wait on CLOCK_REALTIME. */
+#if defined(_WIN32) || defined(__APPLE__)
 #define WAIT_CLOCK CLOCK_REALTIME
 #else
 #define WAIT_CLOCK CLOCK_MONOTONIC
@@ -78,7 +79,9 @@ static int32_t wait_count(uint32_t id,int32_t need,uint32_t *timeout,int block,u
         Waiter w={.need=need};
         pthread_condattr_t attr;
         host_check(pthread_condattr_init(&attr));
+#ifndef __APPLE__
         host_check(pthread_condattr_setclock(&attr,WAIT_CLOCK));
+#endif
         host_check(pthread_cond_init(&w.event,&attr));
         host_check(pthread_condattr_destroy(&attr));
         Waiter **tail=&s->first;

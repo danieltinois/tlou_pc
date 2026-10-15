@@ -5,7 +5,8 @@
  * in guest offsets inside the game image. The game keeps running; the next report needs frames
  * to resume and stop again.
  * Registers: Linux sends SIGURG to each thread (the handler only copies its registers and frame
- * chain); Windows suspends each thread for GetThreadContext. Memory is read with
+ * chain), macOS too, listing the threads through Mach (no /proc); Windows suspends each thread
+ * for GetThreadContext. Memory is read with
  * process_vm_readv / ReadProcessMemory, so a bad frame pointer cannot fault. */
 #define _GNU_SOURCE
 #include "runtime.h"
@@ -176,6 +177,9 @@ int runtime_freeze_step(FreezeMonitor *m, uint64_t frames, uint64_t now_ms) {
 /* ---- Registers of every thread ---- */
 typedef struct {
     uint64_t tid;
+#ifdef __APPLE__
+    pthread_t thread; /* SIGURG target; NULL for threads not created through pthreads */
+#endif
     int captured;
     uintptr_t rip, rsp, rbp;
     unsigned frames;
@@ -209,6 +213,24 @@ static void capture_signal(int sig, siginfo_t *info, void *context) {
     }
     errno = saved;
 }
+#ifdef __APPLE__
+static size_t list_threads(Capture *out, size_t max) {
+    thread_act_array_t list;
+    mach_msg_type_number_t count = 0;
+    if (task_threads(mach_task_self(), &list, &count) != KERN_SUCCESS) return 0;
+    size_t n = 0;
+    for (mach_msg_type_number_t i = 0; i < count; ++i) {
+        if (n < max) {
+            out[n] = (Capture){.tid = compat_thread_tid(list[i]), .thread = pthread_from_mach_thread_np(list[i])};
+            if (out[n].thread) pthread_getname_np(out[n].thread, out[n].name, sizeof(out[n].name));
+            if (out[n].tid) ++n;
+        }
+        mach_port_deallocate(mach_task_self(), list[i]);
+    }
+    vm_deallocate(mach_task_self(), (vm_address_t)list, count * sizeof(*list));
+    return n;
+}
+#else
 static size_t list_threads(Capture *out, size_t max) {
     size_t n = 0;
     DIR *dir = opendir("/proc/self/task");
@@ -230,11 +252,16 @@ static size_t list_threads(Capture *out, size_t max) {
     if (dir) closedir(dir);
     return n;
 }
+#endif
 static void capture(Capture *c) {
     __atomic_store_n(&capture_done, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&capture_out, c, __ATOMIC_RELEASE);
     __atomic_store_n(&capture_tid, (pid_t)c->tid, __ATOMIC_RELEASE);
+#ifdef __APPLE__
+    if (c->thread && !pthread_kill(c->thread, SIGURG)) {
+#else
     if (!syscall(SYS_tgkill, getpid(), (pid_t)c->tid, SIGURG)) {
+#endif
         /* A thread that blocks SIGURG never answers: 30 ms each at most. */
         for (int i = 0; i < 60 && !__atomic_load_n(&capture_done, __ATOMIC_ACQUIRE); ++i) {
             struct timespec nap = {0, 500000};
@@ -378,7 +405,9 @@ static void sleep_ms(unsigned ms) {
 }
 static void *monitor(void *argument) {
     FreezeMonitor *m = argument;
-#ifndef _WIN32
+#ifdef __APPLE__
+    pthread_setname_np("tlg:freeze"); /* macOS names only the calling thread */
+#elif !defined(_WIN32)
     pthread_setname_np(pthread_self(), "tlg:freeze");
 #endif
     const unsigned period = m->seconds >= 4 ? 1000 : (unsigned)m->seconds * 250;

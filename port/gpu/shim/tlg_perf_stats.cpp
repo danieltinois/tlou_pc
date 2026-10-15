@@ -7,7 +7,11 @@
 #include <vector>
 #include "video_core/renderer_vulkan/vk_instance.h"
 
-#ifndef _WIN32
+#ifdef __APPLE__
+#include <sys/resource.h>
+#include <sys/sysctl.h>
+#include <mach/mach.h>
+#elif !defined(_WIN32)
 #include <cstring>
 #include <dlfcn.h>
 #include <sys/sysinfo.h>
@@ -116,6 +120,54 @@ void Run(const Vulkan::Instance* instance) {
             s.vram_total_gb = double(instance->GetDeviceMemoryBudgetNow()) / GiB;
         }
         s.gpu_percent = gpu.Percent();
+        {
+            std::scoped_lock lock{mutex};
+            latest = std::move(s);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+}
+#elif defined(__APPLE__)
+// tlg: macOS measurements. CPU from getrusage, RAM from the task's physical footprint (what
+// Activity Monitor shows) and hw.memsize, VRAM from VK_EXT_memory_budget (MoltenVK). GPU load
+// needs IOKit and stays "n/a".
+uint64_t ProcessMicroseconds() {
+    rusage usage{};
+    if (getrusage(RUSAGE_SELF, &usage) != 0) return 0;
+    const auto us = [](const timeval& t) { return uint64_t(t.tv_sec) * 1000000 + uint64_t(t.tv_usec); };
+    return us(usage.ru_utime) + us(usage.ru_stime);
+}
+
+void Run(const Vulkan::Instance* instance) {
+    const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
+    constexpr double GiB = 1024.0 * 1024.0 * 1024.0;
+    uint64_t memory_size = 0;
+    size_t length = sizeof(memory_size);
+    sysctlbyname("hw.memsize", &memory_size, &length, nullptr, 0);
+    uint64_t last_process = 0;
+    auto last_wall = std::chrono::steady_clock::now();
+    while (true) {
+        Sample s;
+        s.gpu_name = std::string(instance->GetModelName());
+        const uint64_t process = ProcessMicroseconds();
+        const auto wall = std::chrono::steady_clock::now();
+        if (last_process) {
+            const uint64_t wall_us = uint64_t(std::chrono::duration<double>(wall - last_wall).count() * 1e6);
+            s.cpu_percent = CpuPercent(process - last_process, wall_us, cores);
+        }
+        last_process = process;
+        last_wall = wall;
+        task_vm_info_data_t vm{};
+        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+        if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&vm), &count) == KERN_SUCCESS) {
+            s.ram_used_gb = double(vm.phys_footprint) / GiB;
+        }
+        s.ram_total_gb = double(memory_size) / GiB;
+        if (instance->CanReportMemoryUsage()) {
+            s.vram_used_gb = double(instance->GetDeviceMemoryUsage()) / GiB;
+            s.vram_total_gb = double(instance->GetDeviceMemoryBudgetNow()) / GiB;
+        }
+        s.gpu_percent = -1.0f;
         {
             std::scoped_lock lock{mutex};
             latest = std::move(s);
