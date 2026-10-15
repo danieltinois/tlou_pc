@@ -71,7 +71,7 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(XXHASH REQUIRED IMPORTED_TARGET libxxhash)
 pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
-if (NOT WIN32)
+if (NOT WIN32 AND NOT APPLE)
     pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
 endif()
 find_package(miniz QUIET)
@@ -186,8 +186,9 @@ file(GLOB AVPLAYER CONFIGURE_DEPENDS shadps4/core/libraries/avplayer/*.cpp)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale libswresample)
 file(GLOB SHIM_SOURCES CONFIGURE_DEPENDS shim/*.cpp shim/*/*.cpp)
 # Windows: a DLL cannot leave the runtime_* symbols for tlg-probe.exe to resolve, so the
-# library is static there and linked into the executable.
-if (WIN32)
+# library is static there and linked into the executable. macOS does the same: one executable,
+# no dylib with undefined symbols for the two-level namespace linker.
+if (WIN32 OR APPLE)
     set(TLGGPU_KIND STATIC)
 else()
     set(TLGGPU_KIND SHARED)
@@ -212,7 +213,7 @@ target_include_directories(tlggpu PRIVATE shim shadps4 ${SHADER_INCLUDE} third_p
 target_compile_definitions(tlggpu PRIVATE BOOST_ASIO_STANDALONE NDEBUG)
 target_compile_options(tlggpu PRIVATE -Wno-deprecated-declarations -Wno-missing-field-initializers)
 # Runtime symbols (runtime_memory_*, runtime_process_*) resolve against tlg-probe.
-if (NOT WIN32)
+if (NOT WIN32 AND NOT APPLE)
     target_link_options(tlggpu PRIVATE -Wl,--allow-shlib-undefined)
 endif()
 target_link_libraries(tlggpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
@@ -230,14 +231,16 @@ if (WIN32)
     target_compile_definitions(tlggpu PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
     target_compile_options(tlggpu PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/shim/tlg_win_compat.h)
     target_link_libraries(tlggpu PUBLIC Vulkan::Vulkan ws2_32 bcrypt ntdll synchronization winmm pdh)
+elseif (APPLE)
+    # SDL3 owns the window and the Metal layer; Vulkan goes through the loader to MoltenVK.
+    target_link_libraries(tlggpu PUBLIC Vulkan::Vulkan)
 else()
     target_link_libraries(tlggpu PUBLIC PkgConfig::X11)
 endif()
 
-# tlg (Windows): tlggpu is a static library there, so the loader and the HLE runtime are
+# tlg (Windows, macOS): tlggpu is a static library there, so the loader and the HLE runtime are
 # linked here, where CMake knows its dependencies (build.sh builds them with ninja).
-if (WIN32)
-    enable_language(RC)
+if (WIN32 OR APPLE)
     file(GLOB TLG_RUNTIME CONFIGURE_DEPENDS ../src/runtime*.c)
     # The game's hook table (src/runtime_game.h): PORT_GAME (build.sh passes it), else the only
     # src/game_*.c besides game_none.c, else game_none.c (core-only build).
@@ -261,19 +264,23 @@ if (WIN32)
     add_library(atrac9 STATIC ${TLG_ATRAC9})
     target_compile_options(atrac9 PRIVATE -w)
     set_target_properties(atrac9 PROPERTIES C_STANDARD 99 INTERPROCEDURAL_OPTIMIZATION OFF)
+    # Per-game environment prefix (build.sh passes PORT_ENV_PREFIX from packaging/port.env).
+    set(PORT_ENV_PREFIX "" CACHE STRING "Per-game env prefix aliased to TLG_ (ISS_, GR2_); empty = none")
+    # tlg: libSceFont (runtime_gr2_font.c) renders glyphs with FreeType.
+    pkg_check_modules(FREETYPE REQUIRED IMPORTED_TARGET freetype2)
+endif()
+
+if (WIN32)
+    enable_language(RC)
     add_executable(tlg-probe ../src/probe.c ${TLG_RUNTIME} ../src/compat_win.c ../src/cpu_check.c ../src/vulkan_smoke.c
         ../src/isa_rewrite.c ../src/isa_emulate.c
         ../packaging/windows/tlg-probe.rc)
     set_target_properties(tlg-probe PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
     target_compile_options(tlg-probe PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
     target_include_directories(tlg-probe PRIVATE .. ../src)
-    # Per-game environment prefix (build.sh passes PORT_ENV_PREFIX from packaging/port.env).
-    set(PORT_ENV_PREFIX "" CACHE STRING "Per-game env prefix aliased to TLG_ (ISS_, GR2_); empty = none")
     if(PORT_ENV_PREFIX)
         target_compile_definitions(tlg-probe PRIVATE "PORT_ENV_PREFIX=\"${PORT_ENV_PREFIX}\"")
     endif()
-    # tlg: libSceFont (runtime_gr2_font.c) renders glyphs with FreeType.
-    pkg_check_modules(FREETYPE REQUIRED IMPORTED_TARGET freetype2)
     target_link_libraries(tlg-probe PRIVATE tlggpu atrac9 PkgConfig::FREETYPE onecore bcrypt ws2_32 -pthread)
     # The PS4 range (64 GiB - 1 TiB) must stay free: no high-entropy ASLR for heaps and stacks.
     # The guest main thread runs on the process stack: 16 MiB, committed (no stack probes).
@@ -337,6 +344,26 @@ if (WIN32)
     add_executable(tlg-play WIN32 ../packaging/windows/play.c ../packaging/windows/play.rc)
     target_compile_options(tlg-play PRIVATE -municode)
     target_link_options(tlg-play PRIVATE -municode)
+endif()
+
+# tlg (macOS): x86_64 only, run under Rosetta 2 on Apple Silicon (build.sh, macos-env.sh).
+if (APPLE)
+    add_executable(tlg-probe ../src/probe.c ${TLG_RUNTIME} ../src/cpu_check.c ../src/vulkan_smoke.c
+        ../src/isa_rewrite.c ../src/isa_emulate.c)
+    # isa_emulate runs inside guest code: no XMM/YMM.
+    set_source_files_properties(../src/isa_emulate.c PROPERTIES COMPILE_OPTIONS "-mgeneral-regs-only")
+    set_target_properties(tlg-probe PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
+    target_compile_options(tlg-probe PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
+    target_include_directories(tlg-probe PRIVATE .. ../src)
+    if(PORT_ENV_PREFIX)
+        target_compile_definitions(tlg-probe PRIVATE "PORT_ENV_PREFIX=\"${PORT_ENV_PREFIX}\"")
+    endif()
+    target_link_libraries(tlg-probe PRIVATE tlggpu atrac9 PkgConfig::FREETYPE -pthread)
+    # The guest main thread runs on the process stack: 16 MiB, like Windows.
+    target_link_options(tlg-probe PRIVATE -Wl,-stack_size,0x1000000)
+    add_executable(tlg-gpu-capabilities ../tools/gpu_capabilities.c)
+    target_include_directories(tlg-gpu-capabilities PRIVATE shadps4)
+    target_link_libraries(tlg-gpu-capabilities PRIVATE Vulkan::Vulkan)
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.

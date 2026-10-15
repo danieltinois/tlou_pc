@@ -73,9 +73,18 @@ int main(int argc, char **argv) {
         .pApplicationName = "tlg scene scaling probe",
         .apiVersion = VK_API_VERSION_1_3,
     };
+#ifdef __APPLE__
+    /* MoltenVK is a portability-subset driver: the loader lists it only when asked to. */
+    static const char *const extensions[] = {VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME};
+#endif
     const VkInstanceCreateInfo create = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
         .pApplicationInfo = &app,
+#ifdef __APPLE__
+        .flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR,
+        .enabledExtensionCount = 1,
+        .ppEnabledExtensionNames = extensions,
+#endif
     };
     VkInstance instance = VK_NULL_HANDLE;
     if (vkCreateInstance(&create, NULL, &instance) != VK_SUCCESS) {

@@ -60,6 +60,46 @@ MINGW*|MSYS*)
     echo "Built $PWD/out/tlg-probe.exe"
     exit 0
     ;;
+Darwin)
+    # macOS: x86_64 build (Rosetta 2 on Apple Silicon) against the prefix of scripts/macos_deps.sh.
+    # Like Windows, tlggpu is static and CMake links tlg-probe.
+    # shellcheck source=macos-env.sh
+    source ./macos-env.sh
+    for tool in clang cmake ninja pkg-config glslang; do
+        command -v "$tool" >/dev/null || { echo "Need $tool: brew install cmake ninja pkgconf nasm glslang boost" >&2; exit 1; }
+    done
+    if ! pkg-config --exists vulkan sdl3 libavcodec freetype2 libxxhash; then
+        echo "No x86_64 dependencies in $MACOS_DEPS: run scripts/macos_deps.sh first." >&2; exit 1
+    fi
+    if [[ ! -f gpu/third_party/fsr-vulkan/CMakeLists.txt || ! -f gpu/third_party/imgui/imgui.h ||
+          ! -f gpu/third_party/xbyak/xbyak/xbyak.h ]]; then
+        git submodule update --init --recursive
+    fi
+    for patch in gpu/patches/fsr-vulkan/*.patch; do
+        if ! git -C gpu/third_party/fsr-vulkan apply --reverse --check "$PWD/$patch" 2>/dev/null; then
+            git -C gpu/third_party/fsr-vulkan apply "$PWD/$patch"
+        fi
+    done
+    # Boost (headers only) and glslang (a build tool) are the only things taken from Homebrew;
+    # CMAKE_IGNORE_PREFIX_PATH keeps its arm64 libraries out of every other find.
+    brew_prefix=$(brew --prefix 2>/dev/null || echo /opt/homebrew)
+    boost_dir=$(find "$brew_prefix/opt/boost/lib/cmake" -maxdepth 1 -name 'Boost-*' -print -quit 2>/dev/null || true)
+    cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTLG_PGO=off \
+        -DTLG_LTO="${TLG_LTO:-OFF}" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+        -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
+        -DCMAKE_PREFIX_PATH="$MACOS_DEPS" -DCMAKE_IGNORE_PREFIX_PATH="$brew_prefix;/usr/local" \
+        -DCMAKE_BUILD_RPATH="$MACOS_DEPS/lib" -DBoost_DIR="$boost_dir" \
+        -DGLSLANG_COMPILER="$(command -v glslang)" \
+        -DPORT_ENV_PREFIX="${PORT_ENV_PREFIX:-}" -DPORT_GAME="$port_game" >/dev/null
+    echo "GPU library and loader (x86_64): LTO ${TLG_LTO:-OFF}"
+    if ! ninja -C out/gpu tlg-probe tlg-gpu-capabilities > out/gpu-build.log 2>&1; then
+        grep -v '^\[' out/gpu-build.log | tail -40 >&2
+        echo 'Build failed (full log: out/gpu-build.log)' >&2; exit 1
+    fi
+    cp out/gpu/tlg-probe out/gpu/tlg-gpu-capabilities out/
+    echo "Built $PWD/out/tlg-probe ($(lipo -archs out/tlg-probe))"
+    exit 0
+    ;;
 esac
 if [[ -z ${CC:-} ]]; then
     CC=$(command -v cc || command -v gcc || true)
