@@ -54,7 +54,7 @@ static uintptr_t guest_code_end; /* end of the image and its stub areas (emulati
 static void isa_report_hook(void) { isa_rewrite_report(isa_table, stdout); }
 int vulkan_smoke(void);
 
-static void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message); exit(1); }
+static __attribute__((noreturn)) void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message); exit(1); }
 static uint64_t read64(FILE *f) {
     unsigned char b[8];
     if (fread(b, 1, 8, f) != 8) fail("truncated boot file");
@@ -863,7 +863,31 @@ static void decide_tsc(const unsigned char *base, const Segment *segments, uint6
     runtime_profile_tsc_decide(sites, raw, bytes);
 }
 
+#ifdef __APPLE__
+/* Cocoa allows windows and their events on the process's main thread only, and the guest's
+ * main would occupy it. So the loader runs on its own thread with the main thread's 16 MiB
+ * stack, and the main thread does what the GPU library hands it (the window loop). */
+static int probe_main(int argc, char **argv);
+typedef struct { int argc; char **argv; } ProbeArgs;
+static void *probe_thread(void *argument) {
+    const ProbeArgs *args = argument;
+    pthread_setname_np("tlg:main");
+    exit(probe_main(args->argc, args->argv));
+}
 int main(int argc, char **argv) {
+    static ProbeArgs args;
+    args = (ProbeArgs){argc, argv};
+    pthread_attr_t attr;
+    pthread_t thread;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 16u << 20);
+    if (pthread_create(&thread, &attr, probe_thread, &args)) { perror("pthread_create"); return 1; }
+    tlggpu_main_thread_run(); /* does not return */
+}
+static int probe_main(int argc, char **argv) {
+#else
+int main(int argc, char **argv) {
+#endif
     setvbuf(stdout, NULL, _IONBF, 0);
     alias_port_environment();
     runtime_profile_load(); /* core defaults < profile.ini < launcher/player < environment */

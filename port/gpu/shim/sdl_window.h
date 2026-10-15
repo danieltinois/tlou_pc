@@ -56,6 +56,9 @@ private:
     void UpdateMouseCapture();
     void MouseTest();
     SDL_Window* window{};
+#ifdef __APPLE__
+    void* metal_view{}; ///< SDL_MetalView holding the CAMetalLayer of window_info
+#endif
     WindowSystemInfo window_info{};
 };
 

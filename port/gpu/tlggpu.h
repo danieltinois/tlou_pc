@@ -18,6 +18,12 @@ typedef struct {
 void tlggpu_register_kernel(void);
 /* Creates window, Vulkan device, presenter and GPU command processor. */
 int tlggpu_init(const TlgGpuConfig *config);
+#ifdef __APPLE__
+/* macOS: the process's main thread runs here, doing what tlggpu hands it (the window and its
+ * events, which Cocoa allows on the main thread only); the loader runs on another thread
+ * (probe.c). Never returns: the process ends through exit() or the window closing. */
+void tlggpu_main_thread_run(void);
+#endif
 /* Function for an imported NID ("NID#lib#mod"), or 0 when the GPU library does not provide it. */
 uintptr_t tlggpu_resolve(const char *scoped_nid);
 /* Called first by the loader's SIGSEGV handler: 1 when a GPU page-tracking fault was handled. */

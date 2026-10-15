@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <boost/asio/io_context.hpp>
 #include "common/polyfill_thread.h"
 #include "video_core/renderdoc.h"
@@ -215,6 +216,35 @@ static void StartProfileWriter() {
 }
 #endif
 
+#ifdef __APPLE__
+namespace {
+std::mutex g_main_mutex;
+std::condition_variable g_main_cv;
+std::function<void()> g_main_job;
+// Runs job on the process's main thread (tlggpu_main_thread_run), which takes one at a time.
+void RunOnMainThread(std::function<void()> job) {
+    {
+        std::scoped_lock lock{g_main_mutex};
+        g_main_job = std::move(job);
+    }
+    g_main_cv.notify_all();
+}
+} // namespace
+
+extern "C" void tlggpu_main_thread_run(void) {
+    for (;;) {
+        std::function<void()> job;
+        {
+            std::unique_lock lock{g_main_mutex};
+            g_main_cv.wait(lock, [] { return static_cast<bool>(g_main_job); });
+            job = std::move(g_main_job);
+            g_main_job = nullptr;
+        }
+        job();
+    }
+}
+#endif
+
 extern "C" int tlggpu_init(const TlgGpuConfig* config) {
     TlgSettings::Load();
 #ifdef TLG_PGO_GENERATE
@@ -229,7 +259,7 @@ extern "C" int tlggpu_init(const TlgGpuConfig* config) {
     Core::Emulator::FillElfInfo(*config);
     const std::string title = config->title ? config->title : "God of War III";
     const s32 width = config->width, height = config->height;
-    g_window_thread = std::thread([title, width, height] {
+    auto window_loop = [title, width, height] {
         Common::SetCurrentThreadName("tlg:window");
         auto* window = new Frontend::WindowSDL(width, height, title.c_str());
         {
@@ -245,8 +275,13 @@ extern "C" int tlggpu_init(const TlgGpuConfig* config) {
         runtime_report();
         std::fflush(stdout);
         std::_Exit(0);
-    });
+    };
+#ifdef __APPLE__
+    RunOnMainThread(std::move(window_loop)); // Cocoa: windows live on the main thread
+#else
+    g_window_thread = std::thread(std::move(window_loop));
     g_window_thread.detach();
+#endif
     {
         std::unique_lock lock{g_window_mutex};
         g_window_cv.wait(lock, [] { return g_window_ready; });

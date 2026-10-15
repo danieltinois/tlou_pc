@@ -1,4 +1,6 @@
-// tlg: SDL3 window for the Vulkan swapchain (X11 or Wayland).
+// tlg: SDL3 window for the Vulkan swapchain (X11 or Wayland; Win32; Cocoa with a Metal layer).
+// macOS: Cocoa windows and their events belong to the process's main thread, so tlggpu_init
+// hands this window's thread body to it (tlggpu_main_thread_run).
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -6,6 +8,9 @@
 #include <mutex>
 #include <utility>
 #include <SDL3/SDL.h>
+#ifdef __APPLE__
+#include <SDL3/SDL_metal.h>
+#endif
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "sdl_window.h"
@@ -70,7 +75,14 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, width_);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
+#ifdef __APPLE__
+    // MoltenVK presents through a CAMetalLayer (below); full Retina resolution, the swapchain
+    // follows SDL_GetWindowSizeInPixels.
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_METAL_BOOLEAN, true);
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
+#else
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
+#endif
     base_title = title;
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
@@ -89,6 +101,16 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     if (driver && !std::strcmp(driver, "windows")) {
         window_info.type = WindowSystemType::Windows;
         window_info.render_surface = SDL_GetPointerProperty(wp, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+    } else
+#endif
+#ifdef __APPLE__
+    if (driver && !std::strcmp(driver, "cocoa")) {
+        // VK_EXT_metal_surface takes the CAMetalLayer of a Metal view inside the window.
+        metal_view = SDL_Metal_CreateView(window);
+        ASSERT_MSG(metal_view, "Failed to create the Metal view: {}", SDL_GetError());
+        window_info.type = WindowSystemType::Metal;
+        window_info.render_surface = SDL_Metal_GetLayer(metal_view);
+        window_info.render_surface_scale = SDL_GetWindowPixelDensity(window);
     } else
 #endif
     if (driver && !std::strcmp(driver, "x11")) {
@@ -281,6 +303,11 @@ void WindowSDL::ApplyDisplayMode(int mode) {
 }
 
 WindowSDL::~WindowSDL() {
+#ifdef __APPLE__
+    if (metal_view) {
+        SDL_Metal_DestroyView(metal_view);
+    }
+#endif
     SDL_DestroyWindow(window);
 }
 
